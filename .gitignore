@@ -13,3 +13,4 @@ coverage
 prisma/dev.db*
 tsconfig.tsbuildinfo
 *.tsbuildinfo
+snapshot.html
