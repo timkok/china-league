@@ -1,0 +1,275 @@
+// 中国足球比赛监测 - 数据模型
+// Provider: PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// 赛事 / 联赛
+// ============================================================
+enum CompetitionLevel {
+  CSL          // 中超
+  CHINA_LEAGUE_ONE   // 中甲
+  CHINA_LEAGUE_TWO   // 中乙
+  CHINA_CHAMPIONS_LEAGUE // 中冠
+  FA_CUP       // 足协杯
+  WOMEN_SUPER  // 女超
+  WOMEN_LEAGUE_ONE // 女甲
+  YOUTH        // 青少年
+  OTHER        // 其他/地方
+}
+
+model Competition {
+  id          String           @id @default(cuid())
+  name        String           // 例如 "中国足球协会超级联赛"
+  shortName   String           // 例如 "中超"
+  level       CompetitionLevel
+  country     String           @default("CN")
+  description String?
+  websiteUrl  String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  seasons     Season[]
+  matches     Match[]
+
+  @@unique([level, shortName])
+}
+
+model Season {
+  id            String   @id @default(cuid())
+  competitionId String
+  competition   Competition @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  year          Int      // 例如 2025
+  name          String   // 例如 "2025赛季"
+  startDate     DateTime?
+  endDate       DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  matches       Match[]
+
+  @@unique([competitionId, year])
+}
+
+// ============================================================
+// 球队 / 球场
+// ============================================================
+model Team {
+  id          String   @id @default(cuid())
+  name        String   // 全称，例如 "上海海港足球俱乐部"
+  shortName   String   // 简称，例如 "上海海港"
+  city        String?  // 主场城市
+  province    String?
+  founded     Int?
+  homeVenueId String?
+  homeVenue   Venue?   @relation("HomeVenue", fields: [homeVenueId], references: [id])
+  websiteUrl  String?
+  logoUrl     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  aliases     TeamAlias[]
+  homeMatches Match[]  @relation("HomeTeam")
+  awayMatches Match[]  @relation("AwayTeam")
+
+  @@unique([name])
+}
+
+// 球队别名/简称表，用于抓取归一化
+model TeamAlias {
+  id      String @id @default(cuid())
+  teamId  String
+  team    Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  alias   String
+
+  @@unique([alias])
+  @@index([teamId])
+}
+
+model Venue {
+  id        String @id @default(cuid())
+  name      String // 例如 "上海体育场"
+  city      String?
+  province  String?
+  capacity  Int?
+  surface   String?
+  latitude  Float?
+  longitude Float?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  matches   Match[]
+  homeTeams Team[]   @relation("HomeVenue")
+
+  @@unique([name, city])
+}
+
+// ============================================================
+// 比赛
+// ============================================================
+enum MatchStatus {
+  SCHEDULED   // 未开始
+  LIVE        // 进行中
+  FINISHED    // 已结束
+  POSTPONED   // 延期
+  CANCELLED   // 取消
+  ABANDONED   // 中断
+}
+
+model Match {
+  id            String      @id @default(cuid())
+  competitionId String
+  competition   Competition @relation(fields: [competitionId], references: [id])
+  seasonId      String
+  season        Season      @relation(fields: [seasonId], references: [id])
+  round         String?     // 例如 "第10轮" 或 "半决赛"
+  matchday      Int?
+
+  homeTeamId    String
+  homeTeam      Team        @relation("HomeTeam", fields: [homeTeamId], references: [id])
+  awayTeamId    String
+  awayTeam      Team        @relation("AwayTeam", fields: [awayTeamId], references: [id])
+
+  venueId       String?
+  venue         Venue?      @relation(fields: [venueId], references: [id])
+
+  kickoffAt     DateTime
+  status        MatchStatus @default(SCHEDULED)
+
+  homeGoals     Int?
+  awayGoals     Int?
+  homeGoalsHT   Int?
+  awayGoalsHT   Int?
+
+  // 选中的（最可信的）观众人数快照，便于列表查询
+  attendance    Int?
+  attendanceConfidence Float?
+
+  externalId    String?     @unique // 来源唯一 ID，用于幂等抓取
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  attendanceRecords AttendanceRecord[]
+  auditLogs         AuditLog[]
+
+  @@unique([competitionId, seasonId, homeTeamId, awayTeamId, kickoffAt])
+  @@index([kickoffAt])
+  @@index([status])
+}
+
+// ============================================================
+// 观众人数记录
+// ============================================================
+enum SourceType {
+  OFFICIAL_LEAGUE // 联赛/足协官方
+  OFFICIAL_CLUB   // 俱乐部官方
+  MEDIA           // 主流媒体
+  SOCIAL          // 社交媒体/社区
+  MANUAL          // 人工录入
+  UNKNOWN
+}
+
+enum ConfidenceLabel {
+  OFFICIAL
+  MEDIA
+  SOCIAL
+  MANUAL
+  UNKNOWN
+}
+
+model AttendanceRecord {
+  id              String     @id @default(cuid())
+  matchId         String
+  match           Match      @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  attendanceCount Int?       // 解析后的人数
+  estimated       Boolean    @default(false) // 是否为估算（"超过 4 万"）
+  confidenceScore Float      // 0..1
+  confidenceLabel ConfidenceLabel
+  sourceType      SourceType
+  sourceName      String     // 例如 "中超官方", "新华社"
+  sourceUrl       String?
+  rawTextExcerpt  String?    // 原文片段，便于核对
+  note            String?    // 备注，例如 "预计""或将"等不确定描述
+
+  collectedAt     DateTime   @default(now())
+  createdBy       String?    // 人工录入者标识
+  isSelected      Boolean    @default(false) // 当前比赛展示的"主"数据
+  verified        Boolean    @default(false) // 人工已核验
+
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  @@index([matchId])
+  @@index([confidenceScore])
+}
+
+// ============================================================
+// 数据源 & 抓取
+// ============================================================
+model Source {
+  id          String     @id @default(cuid())
+  name        String     // 例如 "中国足球职业联赛联合会"
+  baseUrl     String
+  type        SourceType
+  adapterKey  String     @unique // 例如 "cfl-china", "csl-news"
+  enabled     Boolean    @default(true)
+  schedule    String?    // cron 表达式 (可选)
+  notes       String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  crawlJobs   CrawlJob[]
+}
+
+enum CrawlJobStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  PARTIAL
+  FAILED
+}
+
+model CrawlJob {
+  id          String         @id @default(cuid())
+  sourceId    String
+  source      Source         @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  status      CrawlJobStatus @default(PENDING)
+  trigger     String         @default("manual") // manual / scheduled
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  itemsFound  Int            @default(0)
+  itemsSaved  Int            @default(0)
+  errorLog    String?
+  metadata    Json?
+
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([sourceId])
+  @@index([status])
+}
+
+// ============================================================
+// 审计 / 人工修改
+// ============================================================
+model AuditLog {
+  id         String   @id @default(cuid())
+  matchId    String?
+  match      Match?   @relation(fields: [matchId], references: [id], onDelete: SetNull)
+  entity     String   // 操作的实体名，如 "Match", "AttendanceRecord"
+  entityId   String?
+  action     String   // create / update / delete / select
+  diff       Json?
+  actor      String?  // 用户标识，未来接入鉴权后填充
+  createdAt  DateTime @default(now())
+
+  @@index([entity, entityId])
+}
