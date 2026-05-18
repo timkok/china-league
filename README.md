@@ -6,12 +6,26 @@
 
 ## 🌐 在线预览（静态）
 
-不需要数据库即可看到 dashboard 的样子：
+- **GitHub Pages 项目主页**：https://timkok.github.io/china-league/
+  - 落地页：项目价值、可信度机制、本地启动说明、嵌入式 mini dashboard
+  - Dashboard 完整预览：https://timkok.github.io/china-league/preview/
 
-- **GitHub Pages**（启用后）：https://timkok.github.io/china-league/
-- htmlpreview 渲染：https://htmlpreview.github.io/?https://github.com/timkok/china-league/blob/claude/football-match-tracker-fDL8m/docs/index.html
+> 静态预览基于 seed 示例数据；写操作、抓取、API 都需要本地启动完整 Next.js 应用。
 
-> 静态预览只是真实页面的快照（已内联 CSS、移除脚本），写操作和抓取需要本地启动完整服务。
+`docs/` 内的目录结构：
+
+```
+docs/
+├── index.html               ← 落地页（/landing 路由 SSR 后处理）
+├── preview/
+│   ├── index.html           ← Dashboard
+│   ├── matches.html         ← 比赛列表
+│   ├── matches/<id>.html    ← 比赛详情
+│   ├── attendance/missing.html
+│   ├── sources.html
+│   └── stats/{competitions,teams}.html
+└── .nojekyll
+```
 
 ## ✨ 功能
 
