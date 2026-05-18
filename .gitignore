@@ -14,3 +14,4 @@ prisma/dev.db*
 tsconfig.tsbuildinfo
 *.tsbuildinfo
 snapshot.html
+gh-pages-build/

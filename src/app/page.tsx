@@ -1,15 +1,15 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
+import { formatDate, formatDateShort, formatNumber } from "@/lib/utils";
+import { StatCard } from "@/components/stat-card";
+import { SectionHeader } from "@/components/section-header";
+import { EmptyState } from "@/components/empty-state";
+import { MatchCard } from "@/components/match-card";
+import { Top10List, type Top10Row } from "@/components/top10-list";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { formatDate, formatNumber } from "@/lib/utils";
-import { MatchStatusBadge } from "@/components/match-status-badge";
-import { Badge } from "@/components/ui/badge";
+  LeagueAverageBlock,
+  type LeagueAverageRow,
+} from "@/components/league-average-block";
 
 export const dynamic = "force-dynamic";
 
@@ -25,54 +25,97 @@ async function getDashboard() {
   const weekEnd = new Date(todayStart);
   weekEnd.setDate(weekEnd.getDate() + 4);
 
-  const [todayMatches, recentMatches, missingCount, top10, byComp] = await Promise.all([
+  const [
+    todayMatches,
+    recentMatchesCount,
+    missingCount,
+    competitions,
+    perCompMatches,
+    top10Raw,
+    latestCollectedAt,
+  ] = await Promise.all([
     prisma.match.findMany({
       where: { kickoffAt: { gte: todayStart, lt: todayEnd } },
       include: { homeTeam: true, awayTeam: true, venue: true, competition: true },
       orderBy: { kickoffAt: "asc" },
     }),
-    prisma.match.findMany({
+    prisma.match.count({
       where: { kickoffAt: { gte: weekStart, lt: weekEnd } },
-      include: { homeTeam: true, awayTeam: true, competition: true },
-      orderBy: { kickoffAt: "asc" },
     }),
     prisma.match.count({
-      where: {
-        status: "FINISHED",
-        attendance: null,
-      },
+      where: { status: "FINISHED", attendance: null },
+    }),
+    prisma.competition.findMany(),
+    prisma.match.findMany({
+      where: { status: "FINISHED", attendance: { not: null } },
+      select: { competitionId: true, attendance: true },
     }),
     prisma.match.findMany({
       where: { attendance: { not: null } },
       orderBy: { attendance: "desc" },
-      take: 10,
-      include: { homeTeam: true, awayTeam: true, competition: true, venue: true },
+      take: 30,
+      include: {
+        homeTeam: true,
+        awayTeam: true,
+        competition: true,
+        venue: true,
+        attendanceRecords: {
+          where: { isSelected: true },
+          take: 1,
+        },
+      },
     }),
-    prisma.match.groupBy({
-      by: ["competitionId"],
-      where: { attendance: { not: null }, status: "FINISHED" },
-      _avg: { attendance: true },
-      _count: { _all: true },
+    prisma.attendanceRecord.findFirst({
+      orderBy: { collectedAt: "desc" },
+      select: { collectedAt: true },
     }),
   ]);
 
-  const compIds = byComp.map((b) => b.competitionId);
-  const comps = await prisma.competition.findMany({
-    where: { id: { in: compIds } },
+  const compById = new Map(competitions.map((c) => [c.id, c]));
+  const aggMap = new Map<string, { total: number; count: number }>();
+  for (const m of perCompMatches) {
+    if (m.attendance == null) continue;
+    const a = aggMap.get(m.competitionId) ?? { total: 0, count: 0 };
+    a.total += m.attendance;
+    a.count += 1;
+    aggMap.set(m.competitionId, a);
+  }
+  const leagueAverages: LeagueAverageRow[] = [...aggMap.entries()]
+    .map(([id, v]) => ({
+      competitionShort: compById.get(id)?.shortName ?? "未知",
+      avg: v.total / v.count,
+      sampleCount: v.count,
+    }))
+    .sort((a, b) => b.avg - a.avg);
+
+  const top10: Top10Row[] = top10Raw.map((m) => {
+    const r = m.attendanceRecords[0];
+    return {
+      id: m.id,
+      homeShort: m.homeTeam.shortName,
+      awayShort: m.awayTeam.shortName,
+      homeGoals: m.homeGoals,
+      awayGoals: m.awayGoals,
+      competitionShort: m.competition.shortName,
+      venueName: m.venue?.name ?? null,
+      kickoffAt: m.kickoffAt.toISOString(),
+      attendance: m.attendance,
+      confidence: m.attendanceConfidence ?? null,
+      selectedSourceType: r?.sourceType ?? null,
+      selectedSourceName: r?.sourceName ?? null,
+      selectedSourceUrl: r?.sourceUrl ?? null,
+      estimated: !!r?.estimated,
+    };
   });
 
   return {
     todayMatches,
-    recentMatches,
+    recentMatchesCount,
     missingCount,
+    coveredLeagueCount: leagueAverages.length,
+    leagueAverages,
     top10,
-    perComp: byComp
-      .map((b) => ({
-        competition: comps.find((c) => c.id === b.competitionId)!,
-        avg: b._avg.attendance ?? 0,
-        count: b._count._all,
-      }))
-      .sort((a, b) => b.avg - a.avg),
+    latestCollectedAt: latestCollectedAt?.collectedAt ?? null,
   };
 }
 
@@ -80,155 +123,159 @@ export default async function HomePage() {
   const data = await getDashboard();
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">📊 数据看板</h1>
-        <p className="text-sm text-muted-foreground">
-          关注中超、中甲、中乙、足协杯等各级赛事的赛果与现场上座
-        </p>
-      </div>
+    <div className="space-y-8">
+      {/* 标题区 */}
+      <section className="space-y-2">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight md:text-3xl">
+              📊 中国足球比赛监测
+            </h1>
+            <p className="text-sm text-muted-foreground md:text-base">
+              中超 · 中甲 · 中乙 · 足协杯 — 持续追踪赛程、赛果与现场上座
+            </p>
+          </div>
+          <div className="text-right text-xs text-muted-foreground">
+            <div>数据更新：{formatDate(data.latestCollectedAt)}</div>
+            <div className="mt-0.5">
+              来源优先级：联赛/足协 &gt; 俱乐部 &gt; 媒体 &gt; 社交 &gt; 人工
+            </div>
+          </div>
+        </div>
+      </section>
 
-      <div className="grid gap-4 md:grid-cols-4">
-        <StatCard label="今日比赛" value={data.todayMatches.length} hint="按开球时间统计" />
-        <StatCard label="最近 7 天" value={data.recentMatches.length} hint="向前 3 天向后 4 天" />
+      {/* KPI 区 */}
+      <section
+        className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"
+        aria-label="核心指标"
+      >
+        <StatCard
+          label="今日比赛"
+          value={data.todayMatches.length}
+          hint="按 Asia/Shanghai 时区统计"
+          href="/matches"
+          tone={data.todayMatches.length > 0 ? "info" : "default"}
+        />
+        <StatCard
+          label="最近 7 天比赛"
+          value={data.recentMatchesCount}
+          hint="向前 3 天、向后 4 天"
+          href="/matches"
+        />
         <StatCard
           label="缺失上座的已结束比赛"
           value={data.missingCount}
-          hint="待人工补录或抓取"
-          highlight
+          hint="点击进入补录队列"
+          href="/attendance/missing"
+          tone={data.missingCount > 0 ? "warn" : "success"}
         />
         <StatCard
-          label="覆盖联赛数"
-          value={data.perComp.length}
-          hint="已有上座统计的联赛"
+          label="已覆盖联赛"
+          value={data.coveredLeagueCount}
+          hint="已有可统计的上座样本"
+          href="/stats/competitions"
         />
-      </div>
+      </section>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>今日比赛</CardTitle>
-            <CardDescription>{formatDate(new Date())} 的安排</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {data.todayMatches.length === 0 && (
-              <p className="text-sm text-muted-foreground">今日暂无比赛</p>
-            )}
+      {/* 今日比赛 */}
+      <section className="space-y-3" aria-label="今日比赛">
+        <SectionHeader
+          title="🎯 今日比赛"
+          subtitle={`${formatDateShort(new Date())} 的安排（${data.todayMatches.length} 场）`}
+          actionHref="/matches"
+          actionLabel="查看全部比赛 →"
+        />
+        {data.todayMatches.length === 0 ? (
+          <EmptyState
+            icon="🛌"
+            title="今天没有安排比赛"
+            description="可以先看看最近 7 天的赛程，或前往缺失上座队列补录历史数据。"
+            actionHref="/matches"
+            actionLabel="查看比赛列表"
+          />
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {data.todayMatches.map((m) => (
-              <Link
+              <MatchCard
                 key={m.id}
-                href={`/matches/${m.id}`}
-                className="block rounded-md border p-3 hover:bg-accent"
-              >
-                <div className="flex items-center justify-between text-sm">
-                  <Badge variant="outline">{m.competition.shortName}</Badge>
-                  <MatchStatusBadge status={m.status} />
-                </div>
-                <div className="mt-2 flex items-center justify-between">
-                  <span className="font-medium">{m.homeTeam.shortName}</span>
-                  <span className="text-muted-foreground">vs</span>
-                  <span className="font-medium">{m.awayTeam.shortName}</span>
-                </div>
-                <div className="mt-1 text-xs text-muted-foreground">
-                  {formatDate(m.kickoffAt)} · {m.venue?.name ?? "未知球场"}
-                </div>
-              </Link>
+                id={m.id}
+                competitionShortName={m.competition.shortName}
+                status={m.status}
+                round={m.round}
+                homeTeamShortName={m.homeTeam.shortName}
+                awayTeamShortName={m.awayTeam.shortName}
+                kickoffAt={m.kickoffAt}
+                venueName={m.venue?.name}
+                venueCity={m.venue?.city}
+                homeGoals={m.homeGoals}
+                awayGoals={m.awayGoals}
+                attendance={m.attendance}
+              />
             ))}
-          </CardContent>
-        </Card>
+          </div>
+        )}
+      </section>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>各级联赛场均观众</CardTitle>
-            <CardDescription>基于已结束比赛与已确认上座数据</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {data.perComp.length === 0 && (
-              <p className="text-sm text-muted-foreground">暂无可统计数据</p>
-            )}
-            {data.perComp.map((c) => (
-              <div key={c.competition.id} className="flex items-center justify-between text-sm">
-                <span className="flex items-center gap-2">
-                  <Badge variant="outline">{c.competition.shortName}</Badge>
-                  <span className="text-muted-foreground">
-                    {c.count} 场样本
-                  </span>
-                </span>
-                <span className="font-mono font-medium">
-                  {formatNumber(Math.round(c.avg))} 人
-                </span>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      </div>
+      {/* 联赛场均 */}
+      <section className="space-y-3" aria-label="各联赛场均观众">
+        <SectionHeader
+          title="📈 各级联赛场均观众"
+          subtitle="基于已结束比赛中已选中的上座数据；样本不足 3 场会标记"
+          actionHref="/stats/competitions"
+          actionLabel="完整联赛统计 →"
+        />
+        <div className="rounded-lg border bg-card p-4">
+          <LeagueAverageBlock rows={data.leagueAverages} />
+        </div>
+      </section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>🏆 单场上座 Top 10</CardTitle>
-          <CardDescription>所有联赛合并排名</CardDescription>
-        </CardHeader>
-        <CardContent className="divide-y">
-          {data.top10.length === 0 && (
-            <p className="text-sm text-muted-foreground">暂无上座数据</p>
-          )}
-          {data.top10.map((m, i) => (
-            <Link
-              key={m.id}
-              href={`/matches/${m.id}`}
-              className="flex items-center justify-between py-3 hover:bg-accent rounded px-2"
-            >
-              <div className="flex items-center gap-3">
-                <span className="text-xl font-bold text-muted-foreground w-6">{i + 1}</span>
-                <div>
-                  <div className="font-medium">
-                    {m.homeTeam.shortName} {m.homeGoals ?? "-"} :{" "}
-                    {m.awayGoals ?? "-"} {m.awayTeam.shortName}
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    <Badge variant="outline" className="mr-1">
-                      {m.competition.shortName}
-                    </Badge>
-                    {m.venue?.name ?? ""} · {formatDate(m.kickoffAt)}
-                  </div>
-                </div>
-              </div>
-              <div className="text-right">
-                <div className="font-mono text-lg font-semibold">
-                  {formatNumber(m.attendance)}
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  可信度 {m.attendanceConfidence != null ? Math.round(m.attendanceConfidence * 100) : "—"}
-                </div>
-              </div>
-            </Link>
-          ))}
-        </CardContent>
-      </Card>
+      {/* Top 10 */}
+      <section className="space-y-3" aria-label="单场上座 Top 10">
+        <SectionHeader
+          title="🏆 单场上座 Top 10"
+          subtitle="按联赛筛选；每条记录展示来源类型与可信度"
+        />
+        {data.top10.length === 0 ? (
+          <EmptyState
+            icon="📭"
+            title="暂无上座数据"
+            description="可以前往数据源管理页手动触发抓取，或在比赛详情页人工录入。"
+            actionHref="/sources"
+            actionLabel="管理数据源"
+          />
+        ) : (
+          <Top10List rows={data.top10} />
+        )}
+      </section>
+
+      {/* 帮助卡片 */}
+      <section className="rounded-lg border bg-card p-4 text-sm">
+        <h3 className="mb-2 font-semibold">📘 关于上座数据可信度</h3>
+        <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
+          <li>
+            <b>高可信（≥ 90）</b>：联赛/足协官方、人工已核验
+          </li>
+          <li>
+            <b>中高可信（70–89）</b>：俱乐部官方、权威媒体报道
+          </li>
+          <li>
+            <b>待核验（50–69）</b>：社交媒体、社区来源
+          </li>
+          <li>
+            <b>低可信（&lt; 50）</b>：未知或质量不明的来源
+          </li>
+          <li>
+            <b>估算数据</b>（如"超过 4 万人"、"近 3 万人"）会单独标记，避免被当成精确值。
+          </li>
+        </ul>
+        <div className="mt-3 text-xs text-muted-foreground">
+          想补充某场比赛？前往{" "}
+          <Link href="/attendance/missing" className="text-primary underline-offset-2 hover:underline">
+            缺失上座队列
+          </Link>{" "}
+          或打开比赛详情页人工录入。
+        </div>
+      </section>
     </div>
-  );
-}
-
-function StatCard({
-  label,
-  value,
-  hint,
-  highlight,
-}: {
-  label: string;
-  value: number;
-  hint?: string;
-  highlight?: boolean;
-}) {
-  return (
-    <Card className={highlight && value > 0 ? "border-amber-300" : undefined}>
-      <CardHeader className="pb-2">
-        <CardDescription>{label}</CardDescription>
-        <CardTitle className="text-3xl font-bold tabular-nums">
-          {formatNumber(value)}
-        </CardTitle>
-      </CardHeader>
-      {hint && <CardContent className="pt-0 text-xs text-muted-foreground">{hint}</CardContent>}
-    </Card>
   );
 }

@@ -4,6 +4,15 @@
 
 > 重点：每条上座数据都保留**来源 URL、抓取时间、来源类型、原文片段、可信度**，并支持多源差异展示与人工修正。
 
+## 🌐 在线预览（静态）
+
+不需要数据库即可看到 dashboard 的样子：
+
+- **GitHub Pages**（启用后）：https://timkok.github.io/china-league/
+- htmlpreview 渲染：https://htmlpreview.github.io/?https://github.com/timkok/china-league/blob/claude/football-match-tracker-fDL8m/docs/index.html
+
+> 静态预览只是真实页面的快照（已内联 CSS、移除脚本），写操作和抓取需要本地启动完整服务。
+
 ## ✨ 功能
 
 - **比赛**：按日期 / 联赛 / 轮次 / 球队 / 城市 / 球场 / 状态多维筛选；支持比赛详情、人工修正、多源对比

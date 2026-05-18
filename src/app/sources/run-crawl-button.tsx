@@ -3,41 +3,44 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/components/ui/toast";
 
 export function RunCrawlButton({ adapterKey }: { adapterKey: string }) {
   const router = useRouter();
+  const toast = useToast();
   const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
 
   async function onClick() {
     setLoading(true);
-    setMsg(null);
     try {
       const res = await fetch("/api/crawl/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ adapterKey }),
       });
-      const j = await res.json();
+      const j = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setMsg(`失败：${j.error ?? res.status}`);
+        const msg = typeof j.error === "string" ? j.error : `请求失败 ${res.status}`;
+        toast.show(`抓取失败：${msg}`, "error");
       } else {
-        setMsg(`完成，保存 ${j.saved} 条`);
+        const warn = Array.isArray(j.warnings) && j.warnings.length > 0;
+        toast.show(
+          `抓取完成：发现 ${j.found ?? 0} 条，保存 ${j.saved ?? 0} 条${warn ? "（含警告）" : ""}`,
+          warn ? "default" : "success"
+        );
       }
       router.refresh();
-    } catch (e: any) {
-      setMsg(`异常：${e?.message ?? e}`);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "未知错误";
+      toast.show(`抓取异常：${msg}`, "error");
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div className="flex items-center gap-2">
-      <Button size="sm" disabled={loading} onClick={onClick} variant="outline">
-        {loading ? "抓取中..." : "执行抓取"}
-      </Button>
-      {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
-    </div>
+    <Button size="sm" variant="outline" disabled={loading} onClick={onClick}>
+      {loading ? "抓取中…" : "执行抓取"}
+    </Button>
   );
 }
