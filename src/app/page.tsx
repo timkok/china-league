@@ -186,13 +186,27 @@ export default async function HomePage() {
           actionLabel="查看全部比赛 →"
         />
         {data.todayMatches.length === 0 ? (
-          <EmptyState
-            icon="🛌"
-            title="今天没有安排比赛"
-            description="可以先看看最近 7 天的赛程，或前往缺失上座队列补录历史数据。"
-            actionHref="/matches"
-            actionLabel="查看比赛列表"
-          />
+          <div className="flex flex-col items-center justify-center rounded-md border border-dashed bg-muted/30 px-6 py-10 text-center">
+            <div className="mb-3 text-3xl" aria-hidden>🛌</div>
+            <div className="text-sm font-medium">今天没有安排比赛</div>
+            <p className="mt-1 max-w-md text-xs text-muted-foreground">
+              可以看看最近 7 天的赛程，或前往缺失上座队列补录历史数据。
+            </p>
+            <div className="mt-4 flex flex-wrap justify-center gap-2">
+              <Link
+                href="/matches"
+                className="inline-flex h-9 items-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+              >
+                查看全部比赛
+              </Link>
+              <Link
+                href="/attendance/missing"
+                className="inline-flex h-9 items-center rounded-md border bg-background px-4 text-sm font-medium hover:bg-accent"
+              >
+                缺失上座队列
+              </Link>
+            </div>
+          </div>
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {data.todayMatches.map((m) => (
